@@ -51,7 +51,7 @@ fully non-interactively, have them ready:
 | **Azure subscription ID** | The sub that will be billed. The Azure default `MSFT-Provisioning-01` sub does **not** allow direct RG creation — you need a sub where you have `Contributor` or `Owner`. | `az account list -o table` |
 | **Resource group name** | Created if missing. | You choose (e.g. `rg-nemoclaw-01`). |
 | **SSH public key** | Authenticates you to the VM. | `~/.ssh/id_ed25519.pub` (or `ssh-keygen -t ed25519 -C nemoclaw`). |
-| **SSH source IP / CIDR** | Restricts who can reach port 22 on the VM. **Required** — there is no wildcard default. Pass your workstation IP (e.g. `70.139.21.206`, auto-normalized to `/32`) or a CIDR range. Typing `0.0.0.0/0` or `*` requires explicit `I ACCEPT` confirmation. | `curl ifconfig.me` or open [ifconfig.me](https://ifconfig.me) in a browser. |
+| **SSH source** | Restricts who can reach port 22 on the VM. **Required** — there is no wildcard default. Accepts a workstation IP (`70.139.21.206` → auto-normalized to `/32`), a CIDR range, **or an Azure NSG service tag** (e.g. `AzureCloud`) — use a service tag if your corporate VPN routes through Azure and your egress IP rotates across many Azure NATs. `0.0.0.0/0` / `*` requires an explicit `I ACCEPT` confirmation. | `curl ifconfig.me` or open [ifconfig.me](https://ifconfig.me) in a browser. If your VPN/IP rotates across Azure IPs, use `AzureCloud`. |
 | **NVIDIA API key** *(optional but strongly recommended)* | Used by `nemoclaw onboard` for routed inference against NVIDIA Endpoints. **Without it, cloud-init onboarding will fail** and you'll need to SSH in and run the installer interactively. | [build.nvidia.com](https://build.nvidia.com/) → API key. Set via `NVIDIA_API_KEY` env var or the script will prompt. |
 
 Also required on your workstation:
@@ -171,9 +171,18 @@ knowing about:
   auto-detected the source IP via `api.ipify.org`, which reports the
   *upstream proxy* IP in CGNAT or Copilot-CLI environments (different from
   what Azure's NSG actually sees). The script now requires you to enter an
-  IP/CIDR explicitly, and treats `0.0.0.0/0` as a dangerous choice that
-  must be confirmed with `I ACCEPT`. Find your actual public IP with
-  `curl ifconfig.me` *on the same workstation you will SSH from*.
+  IP/CIDR/service-tag explicitly, and treats `0.0.0.0/0` as a dangerous
+  choice that must be confirmed with `I ACCEPT`. Find your actual public
+  IP with `curl ifconfig.me` *on the same workstation you will SSH from*.
+
+- **Corporate VPN that routes through Azure.** Some VPN clients
+  (GlobalProtect-on-Azure, ExpressRoute user tunnels, etc.) NAT your
+  outbound traffic through rotating Azure public IPs, so a `/32` allow-list
+  will break every few minutes. Use the **`AzureCloud` service tag** as
+  your SSH source in that case — it covers every Azure public IP range and
+  your SSH key remains the real access control. Symptom: `sshd` logs show
+  you arriving from several different `20.x.x.x` / `52.x.x.x` addresses
+  within the same session.
 - **Ubuntu 24.04 `/run/sshd` race.** On some first boots the openssh-server
   tmpfiles.d rule loses to cloud-init, leaving sshd unable to start
   (`Missing privilege separation directory: /run/sshd`). Socket-activated

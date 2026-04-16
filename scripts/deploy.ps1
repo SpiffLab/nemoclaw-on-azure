@@ -42,11 +42,13 @@ function Read-NonEmpty([string]$prompt) {
 }
 
 function Confirm-SshCidr([string]$cidr) {
-  # Accept a.b.c.d or a.b.c.d/nn; reject anything that looks like "open to everyone"
-  # unless the user re-types it with eyes open.
+  # Accept a.b.c.d or a.b.c.d/nn, an NSG service tag (e.g. AzureCloud,
+  # VirtualNetwork), or — with explicit confirmation — a full wildcard.
   $cidr = $cidr.Trim()
   if ($cidr -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return "$cidr/32" }
   if ($cidr -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$') { return $cidr }
+  # Service tags are PascalCase letters (optionally with a region suffix after a dot).
+  if ($cidr -match '^[A-Z][A-Za-z0-9]+(\.[A-Za-z0-9]+)?$') { return $cidr }
   if ($cidr -in @('*','0.0.0.0/0','Internet')) {
     Write-Host ""
     Write-Host "⚠  You asked to allow SSH from the entire internet." -ForegroundColor Red
@@ -54,7 +56,7 @@ function Confirm-SshCidr([string]$cidr) {
     if ($confirm -eq 'I ACCEPT') { return '0.0.0.0/0' }
     return $null
   }
-  Write-Host "  '$cidr' doesn't look like a valid IP or CIDR." -ForegroundColor Yellow
+  Write-Host "  '$cidr' doesn't look like a valid IP, CIDR, or service tag." -ForegroundColor Yellow
   return $null
 }
 
@@ -73,10 +75,12 @@ if (-not $ResourceGroup) {
 
 if (-not $AllowedSshCidr) {
   Write-Host ""
-  Write-Host "SSH source IP / CIDR (who is allowed to SSH to the VM):" -ForegroundColor Cyan
-  Write-Host "  - Enter your workstation's public IP (e.g. 70.139.21.206) — /32 will be added." -ForegroundColor Gray
-  Write-Host "  - Or a CIDR range (e.g. 70.139.21.0/24)." -ForegroundColor Gray
-  Write-Host "  - To find your IP: open https://ifconfig.me or run 'curl ifconfig.me'." -ForegroundColor Gray
+  Write-Host "SSH source (who can SSH to the VM):" -ForegroundColor Cyan
+  Write-Host "  - Your workstation's public IP (e.g. 70.139.21.206) — /32 will be added." -ForegroundColor Gray
+  Write-Host "  - A CIDR range (e.g. 70.139.21.0/24)." -ForegroundColor Gray
+  Write-Host "  - An Azure NSG service tag (e.g. AzureCloud) — useful if your VPN" -ForegroundColor Gray
+  Write-Host "    routes through Azure and your egress IP rotates." -ForegroundColor Gray
+  Write-Host "  - To find your workstation IP: open https://ifconfig.me or run 'curl ifconfig.me'." -ForegroundColor Gray
   while (-not $AllowedSshCidr) {
     $raw = Read-NonEmpty "  Allowed SSH source"
     $AllowedSshCidr = Confirm-SshCidr $raw

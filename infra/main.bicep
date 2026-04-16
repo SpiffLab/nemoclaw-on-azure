@@ -20,7 +20,7 @@ param adminUsername string = 'azureuser'
 @secure()
 param sshPublicKey string
 
-@description('CIDR allowed to reach SSH (port 22). REQUIRED — no wildcard default. Pass your workstation IP as `a.b.c.d/32`, or an office range. Set to `*` or `0.0.0.0/0` explicitly if (and only if) you accept the risk of exposing SSH to the entire internet.')
+@description('CIDR, IP, or Azure NSG service tag allowed to reach SSH (port 22). REQUIRED — no wildcard default. Pass your workstation IP as `a.b.c.d/32`, a CIDR range, or a service tag like `AzureCloud` (useful when your VPN routes egress through Azure and rotates IPs). Set to `*` / `0.0.0.0/0` explicitly only if you accept exposing SSH to the entire internet.')
 @minLength(1)
 param allowedSshCidr string
 

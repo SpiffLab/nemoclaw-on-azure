@@ -54,10 +54,12 @@ the NVIDIA Container Toolkit separately (not yet scripted here).
 ## Security notes
 
 - **SSH exposure.** `allowedSshCidr` is a **required** parameter with no
-  wildcard default — deployment fails if you don't supply one. Pass your
-  workstation IP (e.g. `70.139.21.206`, normalized to `/32`) or a CIDR
-  range. The interactive wrappers require an explicit `I ACCEPT`
-  confirmation if you really want `0.0.0.0/0`. For anything beyond
+  wildcard default — deployment fails if you don't supply one. Accepts a
+  workstation IP (`70.139.21.206`, normalized to `/32`), a CIDR range, or
+  an Azure NSG service tag (e.g. `AzureCloud` — useful when the operator's
+  corporate VPN NATs through rotating Azure public IPs, in which case a
+  `/32` would break every few minutes). The interactive wrappers require
+  an explicit `I ACCEPT` confirmation for `0.0.0.0/0`. For anything beyond
   throwaway testing, front the VM with Azure Bastion and remove the rule
   entirely.
 - **Secrets.** `sshPublicKey` and `nvidiaApiKey` are declared `@secure()`;

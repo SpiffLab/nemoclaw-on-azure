@@ -73,6 +73,10 @@ validate_cidr() {
   if [[ "$raw" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
     echo "$raw"; return 0
   fi
+  # Azure NSG service tag (PascalCase, optional .region suffix).
+  if [[ "$raw" =~ ^[A-Z][A-Za-z0-9]+(\.[A-Za-z0-9]+)?$ ]]; then
+    echo "$raw"; return 0
+  fi
   case "$raw" in
     '*'|'0.0.0.0/0'|'Internet')
       echo >&2
@@ -81,7 +85,7 @@ validate_cidr() {
       if [[ "$confirm" == "I ACCEPT" ]]; then echo "0.0.0.0/0"; return 0; fi
       ;;
     *)
-      echo "  '$raw' doesn't look like a valid IP or CIDR." >&2
+      echo "  '$raw' doesn't look like a valid IP, CIDR, or service tag." >&2
       ;;
   esac
   echo ""; return 1
@@ -101,10 +105,12 @@ prompt_required RG "Resource group name (will be created if missing)"
 # ---------- SSH source IP / CIDR (required; no wildcard default) ----------
 if [[ -z "$SSH_CIDR" ]]; then
   echo
-  echo "SSH source IP / CIDR (who is allowed to SSH to the VM):"
-  echo "  - Enter your workstation's public IP (e.g. 70.139.21.206) — /32 will be added."
-  echo "  - Or a CIDR range (e.g. 70.139.21.0/24)."
-  echo "  - To find your IP: open https://ifconfig.me or run 'curl ifconfig.me'."
+  echo "SSH source (who can SSH to the VM):"
+  echo "  - Your workstation's public IP (e.g. 70.139.21.206) — /32 will be added."
+  echo "  - A CIDR range (e.g. 70.139.21.0/24)."
+  echo "  - An Azure NSG service tag (e.g. AzureCloud) — useful if your VPN"
+  echo "    routes through Azure and your egress IP rotates."
+  echo "  - To find your workstation IP: open https://ifconfig.me or run 'curl ifconfig.me'."
   while [[ -z "$SSH_CIDR" ]]; do
     read -r -p "  Allowed SSH source: " raw
     SSH_CIDR="$(validate_cidr "$raw")" || true
