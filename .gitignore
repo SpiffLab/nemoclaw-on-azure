@@ -1,0 +1,25 @@
+# Azure / azd
+.azure/
+azd-env/
+*.env
+.env
+.env.*
+
+# Bicep build artifacts
+*.bicep.json
+infra/*.json.tmp
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Secrets & keys
+*.pem
+*.key
+*.pub
+ssh/
+
+# Logs
+*.log

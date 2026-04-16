@@ -1,0 +1,15 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix":       { "value": "nemoclaw" },
+    "location":         { "value": "eastus2" },
+    "vmSize":           { "value": "Standard_D4s_v5" },
+    "adminUsername":    { "value": "azureuser" },
+    "sshPublicKey":     { "value": "REPLACE_WITH_SSH_PUBLIC_KEY" },
+    "allowedSshCidr":   { "value": "0.0.0.0/0" },
+    "nvidiaApiKey":     { "value": "" },
+    "assistantName":    { "value": "my-assistant" },
+    "osDiskSizeGB":     { "value": 64 }
+  }
+}

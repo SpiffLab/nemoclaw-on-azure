@@ -1,0 +1,92 @@
+#cloud-config
+# NemoClaw on Azure — first-boot provisioning
+# Installs Docker + Node 22 (via nvm) + NemoClaw, then runs `nemoclaw onboard`.
+# Placeholders __ADMIN_USERNAME__, __NVIDIA_API_KEY__, __ASSISTANT_NAME__ are
+# substituted at deployment time by infra/modules/vm.bicep.
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - gnupg
+  - jq
+  - lsb-release
+  - uidmap
+
+write_files:
+  - path: /etc/profile.d/nemoclaw.sh
+    permissions: '0644'
+    content: |
+      # Loaded for interactive shells so `nemoclaw` / `openclaw` are on PATH.
+      export NVM_DIR="$HOME/.nvm"
+      [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+
+  - path: /usr/local/sbin/nemoclaw-bootstrap.sh
+    permissions: '0755'
+    content: |
+      #!/usr/bin/env bash
+      # Runs as the admin user via runcmd. Installs Node/NemoClaw and onboards.
+      set -euo pipefail
+
+      LOG=/var/log/nemoclaw-bootstrap.log
+      exec > >(tee -a "$LOG") 2>&1
+      echo "[nemoclaw] bootstrap started $(date -Is)"
+
+      export HOME="/home/__ADMIN_USERNAME__"
+      cd "$HOME"
+
+      # 1. Wait for Docker to be ready (installed via Docker's convenience script below).
+      for i in {1..60}; do
+        if docker info >/dev/null 2>&1; then break; fi
+        sleep 2
+      done
+
+      # 2. Install nvm + Node 22 (matches NemoClaw requirement: >=22.16, npm >=10).
+      if [ ! -d "$HOME/.nvm" ]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
+      fi
+      export NVM_DIR="$HOME/.nvm"
+      # shellcheck disable=SC1091
+      . "$NVM_DIR/nvm.sh"
+      nvm install 22
+      nvm alias default 22
+      node --version
+      npm --version
+
+      # 3. Export NVIDIA API key for the installer (if provided at deploy time).
+      if [ -n "__NVIDIA_API_KEY__" ]; then
+        export NVIDIA_API_KEY="__NVIDIA_API_KEY__"
+        # Persist for future shells.
+        grep -q '^export NVIDIA_API_KEY=' "$HOME/.bashrc" || \
+          echo "export NVIDIA_API_KEY=__NVIDIA_API_KEY__" >> "$HOME/.bashrc"
+      fi
+
+      # 4. Run the official NemoClaw installer (non-interactive best-effort).
+      #    The installer runs `nemoclaw onboard` internally.
+      curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash || {
+        echo "[nemoclaw] installer failed; see $LOG" >&2
+        exit 1
+      }
+
+      # 5. Ensure PATH picks up nemoclaw for later SSH sessions.
+      . "$NVM_DIR/nvm.sh"
+      if command -v nemoclaw >/dev/null 2>&1; then
+        nemoclaw --version || true
+        nemoclaw "__ASSISTANT_NAME__" status || true
+      fi
+
+      echo "[nemoclaw] bootstrap finished $(date -Is)"
+
+runcmd:
+  # --- Docker Engine (official get.docker.com) ---
+  - [ bash, -lc, 'curl -fsSL https://get.docker.com | sh' ]
+  - [ systemctl, enable, --now, docker ]
+  - [ usermod, -aG, docker, __ADMIN_USERNAME__ ]
+
+  # --- NemoClaw bootstrap, running as the admin user ---
+  - [ bash, -lc, 'sudo -u __ADMIN_USERNAME__ -H /usr/local/sbin/nemoclaw-bootstrap.sh' ]
+
+final_message: "NemoClaw provisioning finished. See /var/log/nemoclaw-bootstrap.log and /var/log/cloud-init-output.log."
