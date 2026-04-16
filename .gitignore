@@ -6,6 +6,7 @@ azd-env/
 .env.*
 
 # Bicep build artifacts
+infra/main.json
 *.bicep.json
 infra/*.json.tmp
 
