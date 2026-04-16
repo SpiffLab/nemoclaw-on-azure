@@ -13,6 +13,37 @@ stack on an Azure VM using Bicep + cloud-init. NemoClaw installs the
 > Replaces the archived
 > [SpiffLab/nemoclaw-azure](https://github.com/SpiffLab/nemoclaw-azure).
 
+## 🔒 Secrets & safety
+
+**This repository contains no secrets.** `infra/main.parameters.json` is a
+template with placeholder values only — `REPLACE_WITH_SSH_PUBLIC_KEY`,
+`REPLACE_WITH_YOUR_IP/32`, and an empty `nvidiaApiKey`. **Do not commit
+real values into it.** To store your own values, either:
+
+- Pass them as CLI arguments / environment variables to
+  `scripts/deploy.sh` / `scripts/deploy.ps1` (the scripts never persist
+  them), or
+- Create a `infra/main.parameters.local.json` — the name is already in
+  `.gitignore` and will not be tracked.
+
+Things you should treat as credentials once the VM is up:
+
+- **NVIDIA API key** — cloud-init writes it to `~azureuser/.bashrc` on the
+  VM. Anyone with shell on the VM can read it. Rotate via
+  [build.nvidia.com](https://build.nvidia.com/) if exposed.
+- **OpenClaw dashboard token** — printed by `nemoclaw my-assistant
+  status`. Anyone who has it **and** access to your tunnel's local
+  `127.0.0.1:18789` can drive the sandbox. It is not stored anywhere in
+  this repo.
+- **SSH private key** — your usual workstation-side key; `*.pub`/`*.pem`
+  are excluded by `.gitignore` to prevent accidental commits.
+
+The NSG opens **only** port 22 inbound, and only from the CIDR /
+service-tag you provide at deploy time. There is **no wildcard default**
+and no port is opened for the dashboard — it rides entirely inside the
+SSH tunnel (see [OpenClaw web dashboard](#openclaw-web-dashboard-ssh-tunnel)
+below).
+
 ---
 
 ## Architecture
@@ -51,7 +82,7 @@ fully non-interactively, have them ready:
 | **Azure subscription ID** | The sub that will be billed. The Azure default `MSFT-Provisioning-01` sub does **not** allow direct RG creation — you need a sub where you have `Contributor` or `Owner`. | `az account list -o table` |
 | **Resource group name** | Created if missing. | You choose (e.g. `rg-nemoclaw-01`). |
 | **SSH public key** | Authenticates you to the VM. | `~/.ssh/id_ed25519.pub` (or `ssh-keygen -t ed25519 -C nemoclaw`). |
-| **SSH source** | Restricts who can reach port 22 on the VM. **Required** — there is no wildcard default. Accepts a workstation IP (`70.139.21.206` → auto-normalized to `/32`), a CIDR range, **or an Azure NSG service tag** (e.g. `AzureCloud`) — use a service tag if your corporate VPN routes through Azure and your egress IP rotates across many Azure NATs. `0.0.0.0/0` / `*` requires an explicit `I ACCEPT` confirmation. | `curl ifconfig.me` or open [ifconfig.me](https://ifconfig.me) in a browser. If your VPN/IP rotates across Azure IPs, use `AzureCloud`. |
+| **SSH source** | Restricts who can reach port 22 on the VM. **Required** — there is no wildcard default. Accepts a workstation IP (`203.0.113.42` → auto-normalized to `/32`), a CIDR range, **or an Azure NSG service tag** (e.g. `AzureCloud`) — use a service tag if your corporate VPN routes through Azure and your egress IP rotates across many Azure NATs. `0.0.0.0/0` / `*` requires an explicit `I ACCEPT` confirmation. | `curl ifconfig.me` or open [ifconfig.me](https://ifconfig.me) in a browser. If your VPN/IP rotates across Azure IPs, use `AzureCloud`. |
 | **NVIDIA API key** *(optional but strongly recommended)* | Used by `nemoclaw onboard` for routed inference against NVIDIA Endpoints. **Without it, cloud-init onboarding will fail** and you'll need to SSH in and run the installer interactively. | [build.nvidia.com](https://build.nvidia.com/) → API key. Set via `NVIDIA_API_KEY` env var or the script will prompt. |
 
 Also required on your workstation:
@@ -144,34 +175,82 @@ nemoclaw my-assistant status
 nemoclaw my-assistant logs --follow
 ```
 
-### OpenClaw web dashboard
+### OpenClaw web dashboard (SSH tunnel)
 
 The dashboard is bound to `127.0.0.1:18789` **inside the sandbox's network
-namespace** — it's not on the VM's host interface, so an SSH `-L` tunnel alone
-is not enough. Cloud-init enables a systemd unit
-(`openclaw-dashboard-forward.service`) that runs
-`openshell forward start 18789 <assistant-name>` at boot, exposing the
-dashboard on the VM host at `127.0.0.1:18789`.
+namespace** — it's not on a public port and there is no NSG rule for it.
+You reach it through an SSH tunnel over the already-open port 22.
 
-Access it from your workstation:
+Cloud-init installs a systemd unit (`openclaw-dashboard-forward.service`)
+that runs `openshell forward start 18789 <assistant-name>` at boot, which
+proxies the sandbox's loopback dashboard to `127.0.0.1:18789` on the VM
+**host**. Your SSH tunnel then connects your workstation's `127.0.0.1:18789`
+to the VM's `127.0.0.1:18789`, so the dashboard never leaves either
+machine's loopback interface — no public exposure, no extra firewall rule.
 
-```bash
-# 1. Open an SSH tunnel (keep the terminal open)
-ssh -L 18789:127.0.0.1:18789 azureuser@<public-ip>
-
-# 2. In another terminal, grab the dashboard URL+token
-ssh azureuser@<public-ip> 'nemoclaw my-assistant status | grep -oE "http://[^ ]+"'
-
-# 3. Open that URL (http://127.0.0.1:18789/#token=...) in your browser
+```
+  your browser          SSH -L tunnel              VM host                 sandbox
+ ┌───────────┐   ┌─────────────────────────┐   ┌───────────────┐   ┌───────────────────┐
+ │127.0.0.1  │──▶│ encrypted over port 22  │──▶│127.0.0.1:18789│──▶│127.0.0.1:18789    │
+ │    :18789 │   │                         │   │ (openshell    │   │ (openclaw UI)     │
+ └───────────┘   └─────────────────────────┘   │  forward)     │   └───────────────────┘
+                                               └───────────────┘
 ```
 
-If you see `channel N: open failed: connect failed: Connection refused`
-spam in your SSH session, the host-side forward isn't running — start it
-manually:
+**Step-by-step:**
+
+1. **Open the tunnel** (keep this terminal open for the whole session):
+
+   ```bash
+   # macOS / Linux / WSL / Git Bash
+   ssh -N -L 18789:127.0.0.1:18789 azureuser@<public-ip>
+
+   # PowerShell on Windows (same command; -N means "don't run a remote shell")
+   ssh -N -L 18789:127.0.0.1:18789 azureuser@<public-ip>
+   ```
+
+   `-N` keeps the tunnel open without opening an interactive shell, so you
+   won't see `channel N: open failed: connect failed` spam if your browser
+   makes requests before the forward is up. Drop the `-N` if you want an
+   interactive shell on the VM at the same time.
+
+2. **Fetch the dashboard URL + token** from another terminal:
+
+   ```bash
+   ssh azureuser@<public-ip> 'nemoclaw my-assistant status'
+   ```
+
+   Look for a line like:
+   ```
+   Dashboard: http://127.0.0.1:18789/#token=<long-random-string>
+   ```
+   **Treat the token as a password** — anyone who has it and access to your
+   workstation's `127.0.0.1:18789` can drive the sandbox. It's not stored
+   in this repo.
+
+3. **Open that URL in your browser** (on your workstation — it's your
+   local loopback hitting the tunnel).
+
+**If you see `channel N: open failed: connect failed: Connection refused`**
+on the client side, the host-side forward isn't running. Fix:
 
 ```bash
-sudo systemctl start openclaw-dashboard-forward
-# or:  openshell forward start --background 18789 my-assistant
+ssh azureuser@<public-ip> \
+  'sudo systemctl restart openclaw-dashboard-forward && \
+   openshell forward list'
+```
+
+You should see `my-assistant  127.0.0.1  18789  <pid>  running`. If the
+sandbox was restarted, the forward may take up to 5 minutes to reappear
+while the unit's `ExecStartPre` waits for the sandbox to become `Ready`.
+
+**Tunnel-less alternative:** you can also just run `openclaw tui` inside
+the sandbox — no browser, no forwarding, fully text-mode:
+
+```bash
+ssh azureuser@<public-ip>
+nemoclaw my-assistant connect
+openclaw tui
 ```
 
 ## Teardown

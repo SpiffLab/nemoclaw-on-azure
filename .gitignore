@@ -22,5 +22,15 @@ infra/*.json.tmp
 *.pub
 ssh/
 
+# Local Bicep parameter overrides (keep the tracked main.parameters.json
+# as a template only; never commit files containing real SSH keys, API
+# keys, subscription IDs, or workstation IPs).
+infra/main.parameters.local.json
+infra/*.auto.parameters.json
+infra/main.parameters.*.json
+!infra/main.parameters.json
+**/secrets.json
+**/*.secret.*
+
 # Logs
 *.log

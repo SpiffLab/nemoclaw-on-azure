@@ -14,7 +14,10 @@ All inputs are optional; missing values are prompted for interactively.
   --location REGION         Default: centralus
   --ssh-public-key STRING   Contents of your SSH public key
   --nvidia-api-key KEY      NVIDIA API key (or set NVIDIA_API_KEY env var)
-  --allowed-ssh-cidr CIDR   Default: detected public IP /32, or 0.0.0.0/0
+  --allowed-ssh-cidr CIDR   Required. Your workstation IP (a /32 is added),
+                            a CIDR range, or an Azure NSG service tag like
+                            'AzureCloud'. No wildcard default — deployment
+                            refuses to proceed without an explicit value.
   --name-prefix NAME        Default: nemoclaw
   --vm-size SIZE            Default: Standard_D4s_v4
   --admin-username NAME     Default: azureuser
@@ -106,8 +109,8 @@ prompt_required RG "Resource group name (will be created if missing)"
 if [[ -z "$SSH_CIDR" ]]; then
   echo
   echo "SSH source (who can SSH to the VM):"
-  echo "  - Your workstation's public IP (e.g. 70.139.21.206) — /32 will be added."
-  echo "  - A CIDR range (e.g. 70.139.21.0/24)."
+  echo "  - Your workstation's public IP (e.g. 203.0.113.42) — /32 will be added."
+  echo "  - A CIDR range (e.g. 203.0.113.0/24)."
   echo "  - An Azure NSG service tag (e.g. AzureCloud) — useful if your VPN"
   echo "    routes through Azure and your egress IP rotates."
   echo "  - To find your workstation IP: open https://ifconfig.me or run 'curl ifconfig.me'."

@@ -76,8 +76,8 @@ if (-not $ResourceGroup) {
 if (-not $AllowedSshCidr) {
   Write-Host ""
   Write-Host "SSH source (who can SSH to the VM):" -ForegroundColor Cyan
-  Write-Host "  - Your workstation's public IP (e.g. 70.139.21.206) — /32 will be added." -ForegroundColor Gray
-  Write-Host "  - A CIDR range (e.g. 70.139.21.0/24)." -ForegroundColor Gray
+  Write-Host "  - Your workstation's public IP (e.g. 203.0.113.42) — /32 will be added." -ForegroundColor Gray
+  Write-Host "  - A CIDR range (e.g. 203.0.113.0/24)." -ForegroundColor Gray
   Write-Host "  - An Azure NSG service tag (e.g. AzureCloud) — useful if your VPN" -ForegroundColor Gray
   Write-Host "    routes through Azure and your egress IP rotates." -ForegroundColor Gray
   Write-Host "  - To find your workstation IP: open https://ifconfig.me or run 'curl ifconfig.me'." -ForegroundColor Gray
