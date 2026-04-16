@@ -41,9 +41,21 @@ function Read-NonEmpty([string]$prompt) {
   }
 }
 
-function Get-MyPublicIp {
-  try { (Invoke-RestMethod -Uri 'https://api.ipify.org?format=json' -TimeoutSec 5).ip }
-  catch { $null }
+function Confirm-SshCidr([string]$cidr) {
+  # Accept a.b.c.d or a.b.c.d/nn; reject anything that looks like "open to everyone"
+  # unless the user re-types it with eyes open.
+  $cidr = $cidr.Trim()
+  if ($cidr -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return "$cidr/32" }
+  if ($cidr -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$') { return $cidr }
+  if ($cidr -in @('*','0.0.0.0/0','Internet')) {
+    Write-Host ""
+    Write-Host "⚠  You asked to allow SSH from the entire internet." -ForegroundColor Red
+    $confirm = Read-Host "   Type 'I ACCEPT' to confirm, anything else to re-enter"
+    if ($confirm -eq 'I ACCEPT') { return '0.0.0.0/0' }
+    return $null
+  }
+  Write-Host "  '$cidr' doesn't look like a valid IP or CIDR." -ForegroundColor Yellow
+  return $null
 }
 
 # ---------- Prompt for missing required inputs ----------
@@ -57,6 +69,18 @@ if (-not $SubscriptionId) {
 
 if (-not $ResourceGroup) {
   $ResourceGroup = Read-NonEmpty "Resource group name (will be created if missing)"
+}
+
+if (-not $AllowedSshCidr) {
+  Write-Host ""
+  Write-Host "SSH source IP / CIDR (who is allowed to SSH to the VM):" -ForegroundColor Cyan
+  Write-Host "  - Enter your workstation's public IP (e.g. 70.139.21.206) — /32 will be added." -ForegroundColor Gray
+  Write-Host "  - Or a CIDR range (e.g. 70.139.21.0/24)." -ForegroundColor Gray
+  Write-Host "  - To find your IP: open https://ifconfig.me or run 'curl ifconfig.me'." -ForegroundColor Gray
+  while (-not $AllowedSshCidr) {
+    $raw = Read-NonEmpty "  Allowed SSH source"
+    $AllowedSshCidr = Confirm-SshCidr $raw
+  }
 }
 
 if (-not $SshPublicKey) {
@@ -82,20 +106,6 @@ if (-not $NvidiaApiKey) {
     Write-Host "Leave blank to skip; you will need to run 'nemoclaw onboard' manually on the VM." -ForegroundColor Gray
     $NvidiaApiKey = Read-Host -Prompt "  NVIDIA API key (optional)"
     if ($null -eq $NvidiaApiKey) { $NvidiaApiKey = '' }
-  }
-}
-
-if (-not $AllowedSshCidr) {
-  $ip = Get-MyPublicIp
-  if ($ip) {
-    $suggested = "$ip/32"
-    Write-Host ""
-    Write-Host "Detected your public IP: $ip" -ForegroundColor Cyan
-    $ans = Read-Host "  Restrict SSH to $suggested ? [Y/n]"
-    if ($ans -match '^[Nn]') { $AllowedSshCidr = '0.0.0.0/0' } else { $AllowedSshCidr = $suggested }
-  } else {
-    $AllowedSshCidr = Read-Host "CIDR allowed to reach SSH (default: 0.0.0.0/0)"
-    if (-not $AllowedSshCidr) { $AllowedSshCidr = '0.0.0.0/0' }
   }
 }
 

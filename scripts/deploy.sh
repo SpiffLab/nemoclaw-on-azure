@@ -62,6 +62,31 @@ prompt_required() {
   printf -v "$var_name" '%s' "$current"
 }
 
+# Validate an SSH source IP/CIDR, or force the user to explicitly opt in to a
+# wildcard. Returns the canonical CIDR on stdout or empty string on reject.
+validate_cidr() {
+  local raw="$1"
+  raw="${raw## }"; raw="${raw%% }"
+  if [[ "$raw" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    echo "$raw/32"; return 0
+  fi
+  if [[ "$raw" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+    echo "$raw"; return 0
+  fi
+  case "$raw" in
+    '*'|'0.0.0.0/0'|'Internet')
+      echo >&2
+      echo "⚠  You asked to allow SSH from the entire internet." >&2
+      read -r -p "   Type 'I ACCEPT' to confirm, anything else to re-enter: " confirm
+      if [[ "$confirm" == "I ACCEPT" ]]; then echo "0.0.0.0/0"; return 0; fi
+      ;;
+    *)
+      echo "  '$raw' doesn't look like a valid IP or CIDR." >&2
+      ;;
+  esac
+  echo ""; return 1
+}
+
 # ---------- Subscription ----------
 if [[ -z "$SUB_ID" ]]; then
   echo
@@ -72,6 +97,19 @@ fi
 
 # ---------- Resource group ----------
 prompt_required RG "Resource group name (will be created if missing)"
+
+# ---------- SSH source IP / CIDR (required; no wildcard default) ----------
+if [[ -z "$SSH_CIDR" ]]; then
+  echo
+  echo "SSH source IP / CIDR (who is allowed to SSH to the VM):"
+  echo "  - Enter your workstation's public IP (e.g. 70.139.21.206) — /32 will be added."
+  echo "  - Or a CIDR range (e.g. 70.139.21.0/24)."
+  echo "  - To find your IP: open https://ifconfig.me or run 'curl ifconfig.me'."
+  while [[ -z "$SSH_CIDR" ]]; do
+    read -r -p "  Allowed SSH source: " raw
+    SSH_CIDR="$(validate_cidr "$raw")" || true
+  done
+fi
 
 # ---------- SSH key ----------
 if [[ -z "$SSH_KEY" ]]; then
@@ -94,18 +132,6 @@ if [[ -z "$NVIDIA_API_KEY" ]]; then
   echo "NVIDIA API key (from https://build.nvidia.com/) — used for routed inference."
   echo "Leave blank to skip; you will need to run 'nemoclaw onboard' manually on the VM."
   read -r -p "  NVIDIA API key (optional): " NVIDIA_API_KEY || true
-fi
-
-# ---------- SSH CIDR ----------
-if [[ -z "$SSH_CIDR" ]]; then
-  MY_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-  if [[ -n "$MY_IP" ]]; then
-    read -r -p "Detected public IP $MY_IP. Restrict SSH to $MY_IP/32 ? [Y/n]: " ans || true
-    if [[ "$ans" =~ ^[Nn] ]]; then SSH_CIDR="0.0.0.0/0"; else SSH_CIDR="$MY_IP/32"; fi
-  else
-    read -r -p "CIDR allowed to reach SSH [0.0.0.0/0]: " SSH_CIDR || true
-    SSH_CIDR="${SSH_CIDR:-0.0.0.0/0}"
-  fi
 fi
 
 # ---------- Subscription select ----------

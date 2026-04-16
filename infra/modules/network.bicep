@@ -4,7 +4,8 @@ param namePrefix string
 @description('Azure region.')
 param location string
 
-@description('CIDR allowed to reach port 22.')
+@description('CIDR allowed to reach port 22. REQUIRED — deployment fails if empty. Narrow to your workstation IP for anything beyond throwaway testing.')
+@minLength(1)
 param allowedSshCidr string
 
 @description('Tags applied to all resources.')

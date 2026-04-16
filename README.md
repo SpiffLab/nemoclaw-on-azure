@@ -51,8 +51,8 @@ fully non-interactively, have them ready:
 | **Azure subscription ID** | The sub that will be billed. The Azure default `MSFT-Provisioning-01` sub does **not** allow direct RG creation — you need a sub where you have `Contributor` or `Owner`. | `az account list -o table` |
 | **Resource group name** | Created if missing. | You choose (e.g. `rg-nemoclaw-01`). |
 | **SSH public key** | Authenticates you to the VM. | `~/.ssh/id_ed25519.pub` (or `ssh-keygen -t ed25519 -C nemoclaw`). |
+| **SSH source IP / CIDR** | Restricts who can reach port 22 on the VM. **Required** — there is no wildcard default. Pass your workstation IP (e.g. `70.139.21.206`, auto-normalized to `/32`) or a CIDR range. Typing `0.0.0.0/0` or `*` requires explicit `I ACCEPT` confirmation. | `curl ifconfig.me` or open [ifconfig.me](https://ifconfig.me) in a browser. |
 | **NVIDIA API key** *(optional but strongly recommended)* | Used by `nemoclaw onboard` for routed inference against NVIDIA Endpoints. **Without it, cloud-init onboarding will fail** and you'll need to SSH in and run the installer interactively. | [build.nvidia.com](https://build.nvidia.com/) → API key. Set via `NVIDIA_API_KEY` env var or the script will prompt. |
-| **Your public IP** *(optional)* | Narrows the SSH NSG rule to `<ip>/32`. The script auto-detects via `api.ipify.org` and asks to confirm; fallback is `0.0.0.0/0`. | — |
 
 Also required on your workstation:
 
@@ -167,18 +167,13 @@ knowing about:
   ```bash
   az vm list-skus -l <region> --size Standard_D4 --query "[?restrictions[0]]" -o table
   ```
-- **SSH CIDR auto-detection can be wrong behind corporate/CGNAT NAT.**
-  Public IP reported by `api.ipify.org` doesn't always match the IP Azure
-  actually sees. If SSH fails with `kex_exchange_identification: Connection
-  closed by remote host` right after deploy, widen the rule and check the
-  real source IP:
-  ```bash
-  az network nsg rule update -g <rg> --nsg-name nemoclaw-nsg \
-      -n AllowSshInbound --source-address-prefixes '*'
-  ssh azureuser@<ip> 'echo $SSH_CLIENT'   # first column is your real source IP
-  az network nsg rule update -g <rg> --nsg-name nemoclaw-nsg \
-      -n AllowSshInbound --source-address-prefixes '<real-ip>/32'
-  ```
+- **SSH CIDR is required — no wildcard default.** Earlier versions
+  auto-detected the source IP via `api.ipify.org`, which reports the
+  *upstream proxy* IP in CGNAT or Copilot-CLI environments (different from
+  what Azure's NSG actually sees). The script now requires you to enter an
+  IP/CIDR explicitly, and treats `0.0.0.0/0` as a dangerous choice that
+  must be confirmed with `I ACCEPT`. Find your actual public IP with
+  `curl ifconfig.me` *on the same workstation you will SSH from*.
 - **Ubuntu 24.04 `/run/sshd` race.** On some first boots the openssh-server
   tmpfiles.d rule loses to cloud-init, leaving sshd unable to start
   (`Missing privilege separation directory: /run/sshd`). Socket-activated
