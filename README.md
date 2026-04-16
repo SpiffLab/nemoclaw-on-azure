@@ -43,42 +43,69 @@ GPU SKU via the `vmSize` parameter (e.g. `Standard_NC8as_T4_v3`,
 
 ## Prerequisites
 
-- Azure subscription with VM quota for your chosen SKU
+You will be **prompted for these at deploy time** if not supplied — but to run
+fully non-interactively, have them ready:
+
+| Input | Why | How to get it |
+| --- | --- | --- |
+| **Azure subscription ID** | The sub that will be billed. The Azure default `MSFT-Provisioning-01` sub does **not** allow direct RG creation — you need a sub where you have `Contributor` or `Owner`. | `az account list -o table` |
+| **Resource group name** | Created if missing. | You choose (e.g. `rg-nemoclaw-01`). |
+| **SSH public key** | Authenticates you to the VM. | `~/.ssh/id_ed25519.pub` (or `ssh-keygen -t ed25519 -C nemoclaw`). |
+| **NVIDIA API key** *(optional but strongly recommended)* | Used by `nemoclaw onboard` for routed inference against NVIDIA Endpoints. **Without it, cloud-init onboarding will fail** and you'll need to SSH in and run the installer interactively. | [build.nvidia.com](https://build.nvidia.com/) → API key. Set via `NVIDIA_API_KEY` env var or the script will prompt. |
+| **Your public IP** *(optional)* | Narrows the SSH NSG rule to `<ip>/32`. The script auto-detects via `api.ipify.org` and asks to confirm; fallback is `0.0.0.0/0`. | — |
+
+Also required on your workstation:
+
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) 2.60+
 - [Bicep](https://learn.microsoft.com/azure/azure-resource-manager/bicep/install) (bundled with Azure CLI)
-- An SSH public key (`~/.ssh/id_ed25519.pub` or similar)
-- An [NVIDIA API key](https://build.nvidia.com/) for the default inference path
-  (`NVIDIA_API_KEY`)
+- `az login` against a tenant where your target subscription lives
+
+### A note on region + SKU
+
+The default is **`centralus` / `Standard_D4s_v4`** because that combination had
+free capacity in the MCAPS subscription this repo was first validated against.
+`Standard_D4s_v5` / `D4as_v5` in `eastus` and `eastus2` are frequently
+capacity-restricted on new subs. Override with `-Location` / `-VmSize`
+(PowerShell) or `--location` / `--vm-size` (bash) as needed.
 
 ## Quick start
+
+Both deploy scripts are **interactive-friendly** — run with no args to be
+prompted for subscription, resource group, SSH key, NVIDIA key, and SSH
+source IP.
 
 ```bash
 # Clone
 git clone https://github.com/SpiffLab/nemoclaw-on-azure.git
 cd nemoclaw-on-azure
 
-# Log in + pick subscription
-az login
-az account set --subscription <SUBSCRIPTION_ID>
+az login                                 # sign in; tenant must host your target sub
+./scripts/deploy.sh                      # fully interactive — prompts for everything
+```
 
-# Deploy (Linux/macOS)
+Fully scripted (Linux/macOS):
+
+```bash
 export NVIDIA_API_KEY=nvapi-...
 ./scripts/deploy.sh \
-  --resource-group rg-nemoclaw \
-  --location eastus2 \
-  --admin-username azureuser \
+  --subscription-id <SUB_ID> \
+  --resource-group rg-nemoclaw-01 \
+  --location centralus \
   --ssh-public-key "$(cat ~/.ssh/id_ed25519.pub)"
 ```
 
 Windows PowerShell:
 
 ```powershell
+./scripts/deploy.ps1                     # fully interactive
+
+# or scripted:
 $env:NVIDIA_API_KEY = "nvapi-..."
 ./scripts/deploy.ps1 `
-  -ResourceGroup rg-nemoclaw `
-  -Location eastus2 `
-  -AdminUsername azureuser `
-  -SshPublicKey (Get-Content $HOME/.ssh/id_ed25519.pub)
+  -SubscriptionId <SUB_ID> `
+  -ResourceGroup rg-nemoclaw-01 `
+  -Location centralus `
+  -SshPublicKey (Get-Content $HOME/.ssh/id_rsa.pub -Raw).Trim()
 ```
 
 The deploy script:
@@ -129,6 +156,45 @@ Or uninstall NemoClaw in place (keeps the VM):
 curl -fsSL https://raw.githubusercontent.com/NVIDIA/NemoClaw/refs/heads/main/uninstall.sh | bash
 ```
 
+## Troubleshooting & lessons learned
+
+This repo was iterated on a real Azure deployment. First-try pitfalls worth
+knowing about:
+
+- **Region/SKU capacity.** `Standard_D4s_v5` and `Standard_D4as_v5` are often
+  capacity-restricted on new MCAPS subscriptions in `eastus`/`eastus2`.
+  Defaults are now `centralus` + `Standard_D4s_v4`. Check with:
+  ```bash
+  az vm list-skus -l <region> --size Standard_D4 --query "[?restrictions[0]]" -o table
+  ```
+- **SSH CIDR auto-detection can be wrong behind corporate/CGNAT NAT.**
+  Public IP reported by `api.ipify.org` doesn't always match the IP Azure
+  actually sees. If SSH fails with `kex_exchange_identification: Connection
+  closed by remote host` right after deploy, widen the rule and check the
+  real source IP:
+  ```bash
+  az network nsg rule update -g <rg> --nsg-name nemoclaw-nsg \
+      -n AllowSshInbound --source-address-prefixes '*'
+  ssh azureuser@<ip> 'echo $SSH_CLIENT'   # first column is your real source IP
+  az network nsg rule update -g <rg> --nsg-name nemoclaw-nsg \
+      -n AllowSshInbound --source-address-prefixes '<real-ip>/32'
+  ```
+- **Ubuntu 24.04 `/run/sshd` race.** On some first boots the openssh-server
+  tmpfiles.d rule loses to cloud-init, leaving sshd unable to start
+  (`Missing privilege separation directory: /run/sshd`). Socket-activated
+  SSH silently closes connections in that state. `scripts/cloud-init.yaml`
+  now creates the directory and restarts the SSH socket early in `runcmd`.
+- **NemoClaw installer needs `NEMOCLAW_NON_INTERACTIVE=1
+  --yes-i-accept-third-party-software` under cloud-init.** The installer
+  prompts for third-party software acceptance on `/dev/tty`; without a TTY
+  it aborts. The bootstrap script downloads the installer then invokes it
+  with both flags set.
+- **`az deployment group create` failures are silent-ish.** Earlier
+  versions of the deploy wrappers continued past failures and printed
+  "✅ Deployment complete" even when deployment had failed. The current
+  scripts check `$LASTEXITCODE`/exit status and fail loudly, pointing you
+  at `az deployment operation group list`.
+
 ## Repository layout
 
 ```
@@ -141,8 +207,8 @@ nemoclaw-on-azure/
 │       └── vm.bicep            # Linux VM + cloud-init
 ├── scripts/
 │   ├── cloud-init.yaml         # First-boot provisioning
-│   ├── deploy.sh               # Bash deploy wrapper
-│   └── deploy.ps1              # PowerShell deploy wrapper
+│   ├── deploy.sh               # Bash deploy wrapper (prompts for missing inputs)
+│   └── deploy.ps1              # PowerShell deploy wrapper (prompts for missing inputs)
 ├── docs/
 │   └── architecture.md
 ├── azure.yaml                  # azd compatibility

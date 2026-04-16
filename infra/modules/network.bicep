@@ -39,6 +39,9 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
   }
 }
 
+// VNet without subnets first, then the subnet as a child resource, to avoid a
+// race where the subnet deployment can reference the NSG before ARM has fully
+// propagated it (observed as "NSG not found" on first apply in some regions).
 resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
   name: vnetName
   location: location
@@ -47,17 +50,17 @@ resource vnet 'Microsoft.Network/virtualNetworks@2024-01-01' = {
     addressSpace: {
       addressPrefixes: [ '10.42.0.0/16' ]
     }
-    subnets: [
-      {
-        name: subnetName
-        properties: {
-          addressPrefix: '10.42.1.0/24'
-          networkSecurityGroup: {
-            id: nsg.id
-          }
-        }
-      }
-    ]
+  }
+}
+
+resource subnet 'Microsoft.Network/virtualNetworks/subnets@2024-01-01' = {
+  parent: vnet
+  name: subnetName
+  properties: {
+    addressPrefix: '10.42.1.0/24'
+    networkSecurityGroup: {
+      id: nsg.id
+    }
   }
 }
 
@@ -78,7 +81,7 @@ resource publicIp 'Microsoft.Network/publicIPAddresses@2024-01-01' = {
   }
 }
 
-output subnetId string = '${vnet.id}/subnets/${subnetName}'
+output subnetId string = subnet.id
 output publicIpId string = publicIp.id
 output publicIpAddress string = publicIp.properties.ipAddress
 output fqdn string = publicIp.properties.dnsSettings.fqdn

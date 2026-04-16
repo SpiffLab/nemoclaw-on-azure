@@ -7,11 +7,11 @@ targetScope = 'resourceGroup'
 @maxLength(16)
 param namePrefix string = 'nemoclaw'
 
-@description('Azure region.')
-param location string = resourceGroup().location
+@description('Azure region. Default reflects a region with current D-series capacity for this project; override as needed.')
+param location string = 'centralus'
 
 @description('VM size. Default is CPU-only for routed NVIDIA inference. Use an NC-series SKU for local GPU inference.')
-param vmSize string = 'Standard_D4s_v5'
+param vmSize string = 'Standard_D4s_v4'
 
 @description('Admin username on the VM.')
 param adminUsername string = 'azureuser'

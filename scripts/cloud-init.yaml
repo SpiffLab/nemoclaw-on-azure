@@ -29,22 +29,27 @@ write_files:
     content: |
       #!/usr/bin/env bash
       # Runs as the admin user via runcmd. Installs Node/NemoClaw and onboards.
+      # The upstream installer requires a TTY for EULA acceptance when run
+      # interactively; we pass NEMOCLAW_NON_INTERACTIVE=1 and
+      # --yes-i-accept-third-party-software so it works under cloud-init.
       set -euo pipefail
 
       LOG=/var/log/nemoclaw-bootstrap.log
+      # Log file is created by runcmd (root) and chowned to the admin user
+      # before this script is invoked, so the tee append works.
       exec > >(tee -a "$LOG") 2>&1
       echo "[nemoclaw] bootstrap started $(date -Is)"
 
       export HOME="/home/__ADMIN_USERNAME__"
       cd "$HOME"
 
-      # 1. Wait for Docker to be ready (installed via Docker's convenience script below).
+      # 1. Wait for Docker to be ready.
       for i in {1..60}; do
         if docker info >/dev/null 2>&1; then break; fi
         sleep 2
       done
 
-      # 2. Install nvm + Node 22 (matches NemoClaw requirement: >=22.16, npm >=10).
+      # 2. Install nvm + Node 22 (NemoClaw needs Node >=22.16, npm >=10).
       if [ ! -d "$HOME/.nvm" ]; then
         curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
       fi
@@ -59,19 +64,23 @@ write_files:
       # 3. Export NVIDIA API key for the installer (if provided at deploy time).
       if [ -n "__NVIDIA_API_KEY__" ]; then
         export NVIDIA_API_KEY="__NVIDIA_API_KEY__"
-        # Persist for future shells.
+        # Persist for future shells (quoted to survive special chars in keys).
         grep -q '^export NVIDIA_API_KEY=' "$HOME/.bashrc" || \
-          echo "export NVIDIA_API_KEY=__NVIDIA_API_KEY__" >> "$HOME/.bashrc"
+          printf 'export NVIDIA_API_KEY=%q\n' "__NVIDIA_API_KEY__" >> "$HOME/.bashrc"
       fi
 
-      # 4. Run the official NemoClaw installer (non-interactive best-effort).
-      #    The installer runs `nemoclaw onboard` internally.
-      curl -fsSL https://www.nvidia.com/nemoclaw.sh | bash || {
+      # 4. Run the official NemoClaw installer. NEMOCLAW_NON_INTERACTIVE=1 and
+      #    --yes-i-accept-third-party-software are required for cloud-init
+      #    (no TTY for the EULA prompt; otherwise the installer aborts).
+      export NEMOCLAW_NON_INTERACTIVE=1
+      export PATH="$HOME/.local/bin:$PATH"
+      curl -fsSL https://www.nvidia.com/nemoclaw.sh -o /tmp/nemoclaw-installer.sh
+      bash /tmp/nemoclaw-installer.sh --yes-i-accept-third-party-software || {
         echo "[nemoclaw] installer failed; see $LOG" >&2
         exit 1
       }
 
-      # 5. Ensure PATH picks up nemoclaw for later SSH sessions.
+      # 5. Sanity-check PATH for future SSH sessions.
       . "$NVM_DIR/nvm.sh"
       if command -v nemoclaw >/dev/null 2>&1; then
         nemoclaw --version || true
@@ -81,6 +90,17 @@ write_files:
       echo "[nemoclaw] bootstrap finished $(date -Is)"
 
 runcmd:
+  # --- Ubuntu 24.04: ensure /run/sshd exists. The openssh-server tmpfiles.d
+  #     rule sometimes races with cloud-init on first boot, leaving sshd
+  #     unable to start ("Missing privilege separation directory: /run/sshd").
+  #     Socket activation silently closes incoming SSH until this is fixed.
+  - [ mkdir, -p, /run/sshd ]
+  - [ chmod, '0755', /run/sshd ]
+  - [ bash, -lc, 'systemctl restart ssh.socket 2>/dev/null || systemctl restart ssh.service' ]
+
+  # --- Pre-create the bootstrap log so the admin-user script can append. ---
+  - [ bash, -lc, 'touch /var/log/nemoclaw-bootstrap.log && chown __ADMIN_USERNAME__:__ADMIN_USERNAME__ /var/log/nemoclaw-bootstrap.log' ]
+
   # --- Docker Engine (official get.docker.com) ---
   - [ bash, -lc, 'curl -fsSL https://get.docker.com | sh' ]
   - [ systemctl, enable, --now, docker ]
