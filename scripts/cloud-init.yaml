@@ -87,7 +87,50 @@ write_files:
         nemoclaw "__ASSISTANT_NAME__" status || true
       fi
 
+      # 6. Expose the OpenClaw dashboard (bound to 127.0.0.1 inside the sandbox
+      #    at port 18789) on the VM host at 127.0.0.1:18789 so operators can
+      #    reach it over an SSH -L tunnel. Without this forward, the tunnel
+      #    connects but nothing is listening host-side → "Connection refused"
+      #    in the SSH session spam. Uses openshell's own forwarder, which goes
+      #    via the gateway on port 8080 — no extra NSG rule needed.
+      if command -v openshell >/dev/null 2>&1; then
+        # Wait for the sandbox to be Ready so `forward start` doesn't fail.
+        for i in {1..30}; do
+          if openshell sandbox list 2>/dev/null | grep -qE "__ASSISTANT_NAME__\s+.*Ready"; then
+            break
+          fi
+          sleep 5
+        done
+        openshell forward start --background 18789 "__ASSISTANT_NAME__" || \
+          echo "[nemoclaw] dashboard forward failed; run 'openshell forward start --background 18789 __ASSISTANT_NAME__' manually."
+      fi
+
       echo "[nemoclaw] bootstrap finished $(date -Is)"
+
+  # --- systemd unit that restarts the dashboard forward after VM reboots. ---
+  # Cloud-init only runs on first boot; without this, a reboot leaves the
+  # dashboard unreachable until the operator SSHes in and re-forwards.
+  - path: /etc/systemd/system/openclaw-dashboard-forward.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=OpenClaw dashboard port forward (127.0.0.1:18789 -> sandbox)
+      After=docker.service network-online.target
+      Wants=docker.service network-online.target
+
+      [Service]
+      Type=simple
+      User=__ADMIN_USERNAME__
+      Environment=PATH=/home/__ADMIN_USERNAME__/.local/bin:/usr/local/bin:/usr/bin:/bin
+      # Wait for the sandbox to be Ready (cluster + container can take a
+      # minute to come back up after reboot), then run a foreground forward.
+      ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do openshell sandbox list 2>/dev/null | grep -qE "__ASSISTANT_NAME__\\s+.*Ready" && exit 0; sleep 5; done; exit 1'
+      ExecStart=/home/__ADMIN_USERNAME__/.local/bin/openshell forward start 18789 __ASSISTANT_NAME__
+      Restart=on-failure
+      RestartSec=10
+
+      [Install]
+      WantedBy=multi-user.target
 
 runcmd:
   # --- Ubuntu 24.04: ensure /run/sshd exists. The openssh-server tmpfiles.d
@@ -108,5 +151,9 @@ runcmd:
 
   # --- NemoClaw bootstrap, running as the admin user ---
   - [ bash, -lc, 'sudo -u __ADMIN_USERNAME__ -H /usr/local/sbin/nemoclaw-bootstrap.sh' ]
+
+  # --- Enable the dashboard-forward unit so it survives reboots. ---
+  - [ systemctl, daemon-reload ]
+  - [ systemctl, enable, openclaw-dashboard-forward.service ]
 
 final_message: "NemoClaw provisioning finished. See /var/log/nemoclaw-bootstrap.log and /var/log/cloud-init-output.log."

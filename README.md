@@ -144,6 +144,36 @@ nemoclaw my-assistant status
 nemoclaw my-assistant logs --follow
 ```
 
+### OpenClaw web dashboard
+
+The dashboard is bound to `127.0.0.1:18789` **inside the sandbox's network
+namespace** — it's not on the VM's host interface, so an SSH `-L` tunnel alone
+is not enough. Cloud-init enables a systemd unit
+(`openclaw-dashboard-forward.service`) that runs
+`openshell forward start 18789 <assistant-name>` at boot, exposing the
+dashboard on the VM host at `127.0.0.1:18789`.
+
+Access it from your workstation:
+
+```bash
+# 1. Open an SSH tunnel (keep the terminal open)
+ssh -L 18789:127.0.0.1:18789 azureuser@<public-ip>
+
+# 2. In another terminal, grab the dashboard URL+token
+ssh azureuser@<public-ip> 'nemoclaw my-assistant status | grep -oE "http://[^ ]+"'
+
+# 3. Open that URL (http://127.0.0.1:18789/#token=...) in your browser
+```
+
+If you see `channel N: open failed: connect failed: Connection refused`
+spam in your SSH session, the host-side forward isn't running — start it
+manually:
+
+```bash
+sudo systemctl start openclaw-dashboard-forward
+# or:  openshell forward start --background 18789 my-assistant
+```
+
 ## Teardown
 
 ```bash
